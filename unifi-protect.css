@@ -1,0 +1,220 @@
+.mmm-unifiprotect {
+  min-width: 200px;
+  color: #e8e8e8;
+}
+
+.mmm-unifiprotect.compact .mmm-unifiprotect-grid {
+  gap: 6px;
+}
+
+.mmm-unifiprotect-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  opacity: 0.9;
+}
+
+.mmm-unifiprotect-error {
+  color: #f88;
+  font-size: 0.95rem;
+  max-width: 420px;
+}
+
+.mmm-unifiprotect-hint {
+  opacity: 0.65;
+  font-size: 0.9rem;
+}
+
+.mmm-unifiprotect-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.mmm-unifiprotect-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+
+.mmm-unifiprotect-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+.mmm-unifiprotect-snapshot {
+  display: block;
+  max-width: 100%;
+  width: 320px;
+  height: auto;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  object-fit: contain;
+}
+
+.mmm-unifiprotect-native-live {
+  display: block;
+  max-width: 100%;
+  width: 320px;
+  height: 180px;
+  border-radius: 4px;
+  background: #000;
+  object-fit: contain;
+}
+
+.mmm-unifiprotect.compact .mmm-unifiprotect-native-live {
+  width: 200px;
+  height: 112px;
+}
+
+.mmm-unifiprotect.compact .mmm-unifiprotect-snapshot {
+  width: 200px;
+}
+
+.mmm-unifiprotect-stream {
+  width: 320px;
+  height: 180px;
+  border: none;
+  border-radius: 4px;
+  background: #000;
+}
+
+.mmm-unifiprotect.compact .mmm-unifiprotect-stream {
+  width: 200px;
+  height: 112px;
+}
+
+.mmm-unifiprotect-toasts {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 420px;
+}
+
+.mmm-unifiprotect-toast {
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: rgba(80, 120, 200, 0.35);
+  border: 1px solid rgba(120, 160, 240, 0.4);
+}
+
+.mmm-unifiprotect-toast.doorbell {
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 10px 14px;
+  background: rgba(180, 120, 20, 0.45);
+  border: 2px solid rgba(255, 200, 80, 0.85);
+  box-shadow: 0 0 12px rgba(255, 190, 60, 0.35);
+  animation: mmm-up-doorbell-pulse 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mmm-unifiprotect-toast.doorbell {
+    animation: none;
+  }
+}
+
+@keyframes mmm-up-doorbell-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 12px rgba(255, 190, 60, 0.35);
+  }
+
+  50% {
+    box-shadow: 0 0 20px rgba(255, 210, 100, 0.55);
+  }
+}
+
+.mmm-unifiprotect-cell.doorbell-active {
+  border-radius: 6px;
+  box-shadow:
+    0 0 0 3px rgba(255, 200, 80, 0.95),
+    0 0 16px rgba(255, 180, 40, 0.4);
+  transform: scale(1.02);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mmm-unifiprotect-cell.doorbell-active {
+    transform: none;
+    transition: none;
+  }
+}
+
+.mmm-unifiprotect-doorbell-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.72);
+  animation: mmm-up-overlay-fade 0.25s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mmm-unifiprotect-doorbell-overlay {
+    animation: none;
+  }
+}
+
+@keyframes mmm-up-overlay-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.mmm-unifiprotect-doorbell-overlay-inner {
+  max-width: min(92vw, 720px);
+  padding: 24px 28px;
+  border-radius: 12px;
+  text-align: center;
+  background: rgba(30, 22, 12, 0.95);
+  border: 2px solid rgba(255, 200, 80, 0.9);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55);
+}
+
+.mmm-unifiprotect-doorbell-overlay-title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffe08a;
+  margin-bottom: 8px;
+}
+
+.mmm-unifiprotect-doorbell-overlay-sub {
+  font-size: 1.15rem;
+  color: #f0e8dc;
+  margin-bottom: 16px;
+}
+
+.mmm-unifiprotect-doorbell-overlay-image {
+  display: block;
+  max-width: 100%;
+  max-height: min(55vh, 480px);
+  margin: 0 auto;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #000;
+}
+
+.mmm-unifiprotect-doorbell-overlay-stream {
+  display: block;
+  width: min(92vw, 720px);
+  height: min(55vh, 480px);
+  margin: 0 auto;
+  border: none;
+  border-radius: 8px;
+  background: #000;
+}
