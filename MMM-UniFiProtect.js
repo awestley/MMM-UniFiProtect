@@ -87,18 +87,6 @@ function nativeLiveMseTeardown(mod, cameraId) {
 }
 
 /**
- * @param {*} mod
- */
-function nativeLiveMseTeardownAll(mod) {
-  if (!mod._nativeMseState) {
-    return
-  }
-  for (const id of Object.keys(mod._nativeMseState)) {
-    nativeLiveMseTeardown(mod, id)
-  }
-}
-
-/**
  * Tear down the active MSE pipeline (MediaSource, SourceBuffer, blob URL, queue) but preserve the
  * codec string and init segment so the stream can be re-attached to a fresh <video> element after
  * getDom() rebuilds the DOM — without needing a full RESYNC round-trip to the backend.
@@ -233,7 +221,7 @@ function nativeLiveMseAttach(mod, cameraId, video, codecLine, initU8) {
   st.mediaSource = new MediaSource()
   st.objectUrl = URL.createObjectURL(st.mediaSource)
   video.src = st.objectUrl
-  video.play().catch((e) => Log.warn("[MMM-UniFiProtect][mse]", cameraId, "play() rejected:", e && e.message))
+  video.play().catch(e => Log.warn("[MMM-UniFiProtect][mse]", cameraId, "play() rejected:", e && e.message))
   st.mediaSource.addEventListener("sourceopen", () => {
     if (st.failed || !st.pendingInit) {
       Log.warn("[MMM-UniFiProtect][mse]", cameraId, "sourceopen but state invalid, failed=" + st.failed)
@@ -717,7 +705,7 @@ Module.register("MMM-UniFiProtect", {
     const keepNativeIds = new Set(
       (this.cameras || [])
         .filter(c => cameraWantsProtectNativeLiveClient(c, this.config))
-        .map(c => c.id)
+        .map(c => c.id),
     )
     if (this._nativeMseState) {
       for (const id of Object.keys(this._nativeMseState)) {
@@ -907,7 +895,7 @@ Module.register("MMM-UniFiProtect", {
     return root
   },
 
-  notificationReceived(notification, payload, sender) {
+  notificationReceived(notification) {
     if (notification === "MODULE_DOM_CREATED") {
       nativeLiveFlushAttachToDom(this)
       return
