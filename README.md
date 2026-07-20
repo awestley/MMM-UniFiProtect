@@ -8,7 +8,7 @@ Credentials and HTTP/WebSocket traffic stay in **`node_helper.js`** on the Magic
 
 ## Prerequisites
 
-- MagicMirror² with Node.js **20+** (required by `unifi-protect` v4 used by this module).
+- MagicMirror² with Node.js **22.20+** (required by `unifi-protect` v4’s undici dependency; MagicMirror² images ship Node 24).
 - A UniFi OS console running **UniFi Protect** (stable release; Early Access is unsupported by Ubiquiti for third-party clients and may break without notice).
 - A **local** administrator on the console (UniFi cloud-only accounts cannot authenticate the way this module does). Ubiquiti’s current guidance is to create a local admin with full Protect access and, when the console offers it, an **API key** used together with your username and password.
 - **RTSPS** (or RTSP) enabled on camera channels only if you plan to point **go2rtc** or another player at those URLs for `streamUrl` iframe embedding (optional; not required for native live or snapshots).
@@ -213,7 +213,7 @@ This repository’s sample `config/config.js` can read **`UNIFI_PROTECT_*`** fro
 
 The helper loads **`unifi-protect/dist/protect-api.js`** first, then falls back to the package root. **`[connect-step]`** lines are compact: **`unifi-protect`** (installed **version**, **importFrom** `dist` or `package`, optional **subpathFallback**, **exportKeys** count, and **`packageJsonPath`**), then **`session`** (**patchLayer** for the undici header shim, **includeApiKey**). With **`debugLogging`**, the log file also gets **stack** traces on connect errors and extra **moduleLog.debug** lines. If **`exportKeys`** is large, a short **`exportKeysSample`** may appear.
 
-Ensure **`npm install`** ran inside **`modules/MMM-UniFiProtect`** on the host that runs MagicMirror so **`node_modules/unifi-protect`** matches **`package.json`** (v4.x, Node 20+).
+Ensure **`npm install`** ran inside **`modules/MMM-UniFiProtect`** on the host that runs MagicMirror so **`node_modules/unifi-protect`** matches **`package.json`** (v4.x, Node 22.20+).
 
 If the log shows **`unifi-protect` v3.x** or **`unifi-protect incompatible`**, the running host still has an **old `node_modules`**. This module **requires v4** (`package.json` pins it). On the machine or in the Docker build, run **`npm install`** in **`modules/MMM-UniFiProtect`** (prefer **`package-lock.json`** in CI), then redeploy — do not copy a stale **`node_modules`** from an older image.
 
