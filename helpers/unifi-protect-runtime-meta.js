@@ -4,8 +4,8 @@ const fs = require("fs")
 const path = require("path")
 const { createRequire } = require("module")
 
-/** This module’s Node helper targets `unifi-protect` v4 (`login` / `getBootstrap` / `retrieve`, undici). */
-const REQUIRED_UNIFI_PROTECT_MAJOR = 4
+/** This module’s Node helper targets `unifi-protect` v5 (`ProtectClient.connect`, typed events, projection snapshots). */
+const REQUIRED_UNIFI_PROTECT_MAJOR = 5
 
 /**
  * @param {string | null | undefined} version

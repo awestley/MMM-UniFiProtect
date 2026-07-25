@@ -23,19 +23,25 @@ test("semverMajor parses v-prefixed and plain semver", () => {
   assert.equal(semverMajor(null), null)
 })
 
-test("incompatibleUnifiProtectMessage blocks v3", () => {
-  const msg = incompatibleUnifiProtectMessage({
+test("incompatibleUnifiProtectMessage blocks v3 and v4", () => {
+  const msg3 = incompatibleUnifiProtectMessage({
     version: "3.0.4",
     packageJsonPath: "/tmp/node_modules/unifi-protect/package.json",
   })
-  assert.ok(msg && msg.includes("v4"), "expected v4 requirement")
-  assert.ok(msg && msg.includes("3.0.4"), "expected installed version")
+  assert.ok(msg3 && msg3.includes("v5"), "expected v5 requirement")
+  assert.ok(msg3 && msg3.includes("3.0.4"), "expected installed version")
+
+  const msg4 = incompatibleUnifiProtectMessage({
+    version: "4.29.0",
+    packageJsonPath: "/tmp/node_modules/unifi-protect/package.json",
+  })
+  assert.ok(msg4 && msg4.includes("v5"), "expected v5 requirement for v4")
 })
 
-test("incompatibleUnifiProtectMessage allows v4", () => {
+test("incompatibleUnifiProtectMessage allows v5", () => {
   assert.equal(
     incompatibleUnifiProtectMessage({
-      version: "4.28.0",
+      version: "5.2.0",
       packageJsonPath: "/x/package.json",
     }),
     null,

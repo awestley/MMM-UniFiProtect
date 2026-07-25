@@ -6,17 +6,49 @@ const util = require("util")
 const { URL } = require("url")
 
 const NodeHelper = require("node_helper")
-const { normalizeUpdatePacket } = require("./helpers/normalize-update")
+const { typedEventsToUi } = require("./helpers/typed-event-ui")
 const { shouldEmit } = require("./helpers/debounce")
 const { debounceMsForEvent } = require("./helpers/event-debounce")
 const { jpegToDataUrl } = require("./helpers/snapshot")
 const { createModuleLogger, resolveLogFilePath } = require("./helpers/module-logger")
-const { patchProtectApiRetrieve } = require("./helpers/protect-api-retrieve-patch")
-const { resolveProtectApiExport } = require("./helpers/resolve-protect-api-export")
+const { subscribeProtectHttpTrace } = require("./helpers/protect-http-trace")
 const {
   getUnifiProtectRuntimeMeta,
   incompatibleUnifiProtectMessage,
 } = require("./helpers/unifi-protect-runtime-meta")
+
+/**
+ * @param {Disposable | { dispose?: () => void } | null | undefined} sub
+ */
+function disposeSync(sub) {
+  if (!sub) {
+    return
+  }
+  try {
+    if (typeof sub[Symbol.dispose] === "function") {
+      sub[Symbol.dispose]()
+    } else if (typeof sub.dispose === "function") {
+      sub.dispose()
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * @param {AsyncDisposable | null | undefined} client
+ * @returns {Promise<void>}
+ */
+async function disposeProtectClient(client) {
+  if (!client) {
+    return
+  }
+  try {
+    await client[Symbol.asyncDispose]()
+  } catch {
+    /* ignore */
+  }
+}
 
 /** After a failed refresh, ignore duplicate connects for this many ms (same host+user). */
 const CONNECT_FAILURE_BACKOFF_MS = 15000
@@ -93,7 +125,7 @@ function cameraHasEmbeddedStream(cam, cfg) {
 }
 
 /**
- * Use UniFi Protect fMP4 livestream (`unifi-protect` ProtectLivestream) for this camera when no iframe URL is set.
+ * Use UniFi Protect fMP4 livestream (`camera.livestream()`) for this camera when no iframe URL is set.
  *
  * @param {{ id: string, streamUrl: string | null }} cam
  * @param {{ streamUrlByCameraId?: Record<string, string>, protectNativeLive?: boolean }} cfg
@@ -451,12 +483,11 @@ module.exports = NodeHelper.create({
     this.snapshotTimers = []
     this.wsAttached = false
     this.wsHandler = null
-    this.wsCloseHandler = null
+    this._packetSub = null
+    this._connectionLostSub = null
+    this._connectionRecoveredSub = null
+    this._httpTraceUnsub = null
     this._protectImportPromise = null
-    this.normalizeState = {
-      lastMotionByCamera: Object.create(null),
-      lastRingByCamera: Object.create(null),
-    }
     this.debounceMap = new Map()
     this.lastConfig = null
     this._queuedConnect = null
@@ -473,19 +504,37 @@ module.exports = NodeHelper.create({
   stop() {
     this.stopAllProtectNativeLivestreams()
     this.clearSnapshots()
-    this.detachWs()
+    this.detachEvents()
+    this.stopHttpTrace()
+    const api = this.api
     this.api = null
+    void disposeProtectClient(api)
+  },
+
+  stopHttpTrace() {
+    if (typeof this._httpTraceUnsub === "function") {
+      try {
+        this._httpTraceUnsub()
+      } catch {
+        /* ignore */
+      }
+    }
+    this._httpTraceUnsub = null
   },
 
   stopAllProtectNativeLivestreams() {
     for (const [, rec] of this._protectLiveByCamera) {
       try {
-        rec.ls.removeAllListeners()
+        if (rec.abort && typeof rec.abort.abort === "function") {
+          rec.abort.abort()
+        }
       } catch {
         /* ignore */
       }
       try {
-        rec.ls.stop()
+        if (rec.ls && typeof rec.ls[Symbol.asyncDispose] === "function") {
+          void rec.ls[Symbol.asyncDispose]()
+        }
       } catch {
         /* ignore */
       }
@@ -500,45 +549,21 @@ module.exports = NodeHelper.create({
     this.snapshotTimers = []
   },
 
-  detachWs() {
-    if (this.api && this.wsHandler) {
-      this.api.removeListener("message", this.wsHandler)
-    }
-    const ws = this.api?._eventsWs
-    if (ws && this.wsCloseHandler) {
-      ws.removeEventListener("close", this.wsCloseHandler)
-    }
-    this.wsCloseHandler = null
+  detachEvents() {
+    disposeSync(this._packetSub)
+    disposeSync(this._connectionLostSub)
+    disposeSync(this._connectionRecoveredSub)
+    this._packetSub = null
+    this._connectionLostSub = null
+    this._connectionRecoveredSub = null
     this.wsHandler = null
     this.wsAttached = false
   },
 
   async importProtect() {
     if (!this._protectImportPromise) {
-      /**
-       * Prefer the real ESM file so `ProtectApi` is the class from `dist/protect-api.js`.
-       * Some hosts only resolve the package root to a broken interop bundle.
-       */
-      const load = async () => {
-        try {
-          const namespace = await import("unifi-protect/dist/protect-api.js")
-          return {
-            namespace,
-            source: "unifi-protect/dist/protect-api.js",
-            subpathError: null,
-          }
-        } catch (err) {
-          const namespace = await import("unifi-protect")
-          const subpathError = err instanceof Error ? err.message : String(err)
-          return {
-            namespace,
-            source: "unifi-protect",
-            subpathError,
-          }
-        }
-      }
       this._protectImportPromise = Promise.race([
-        load(),
+        import("unifi-protect"),
         new Promise((_, reject) => {
           setTimeout(() => {
             reject(
@@ -660,12 +685,16 @@ module.exports = NodeHelper.create({
       const rec = this._protectLiveByCamera.get(cameraId)
       if (rec) {
         try {
-          rec.ls.removeAllListeners()
+          if (rec.abort && typeof rec.abort.abort === "function") {
+            rec.abort.abort()
+          }
         } catch {
           /* ignore */
         }
         try {
-          rec.ls.stop()
+          if (rec.ls && typeof rec.ls[Symbol.asyncDispose] === "function") {
+            await rec.ls[Symbol.asyncDispose]()
+          }
         } catch {
           /* ignore */
         }
@@ -748,11 +777,10 @@ module.exports = NodeHelper.create({
     this.clearSnapshots()
     this.stopAllProtectNativeLivestreams()
     this._liveNativeFailed.clear()
-    this.detachWs()
-    this.normalizeState = {
-      lastMotionByCamera: Object.create(null),
-      lastRingByCamera: Object.create(null),
-    }
+    this.detachEvents()
+    this.stopHttpTrace()
+    await disposeProtectClient(this.api)
+    this.api = null
     this.debounceMap = new Map()
 
     this.moduleLog.debug("connecting", host)
@@ -763,13 +791,18 @@ module.exports = NodeHelper.create({
       connectProgress(this.moduleLog, "unifi-protect incompatible", { detail: versionBlock })
       throw new Error(versionBlock)
     }
-    const ufpImport = await this.importProtect()
-    const protectMod = ufpImport.namespace
-    const exportKeys = Object.keys(protectMod || {}).sort()
+    const protectMod = await this.importProtect()
+    const { ProtectClient, channels } = protectMod
+    if (typeof ProtectClient?.connect !== "function") {
+      const exportKeys = Object.keys(protectMod || {}).sort()
+      throw new Error(
+        `MMM-UniFiProtect: no ProtectClient.connect (keys=${JSON.stringify(exportKeys)})`,
+      )
+    }
     const ufpLine = {
       version: ufpDisk.version,
-      importFrom: ufpImport.source.includes("protect-api") ? "dist" : "package",
-      exportKeys: exportKeys.length,
+      importFrom: "package",
+      exportKeys: Object.keys(protectMod || {}).length,
     }
     if (ufpDisk.packageJsonPath) {
       ufpLine.packageJsonPath = ufpDisk.packageJsonPath
@@ -777,88 +810,42 @@ module.exports = NodeHelper.create({
     if (ufpDisk.error) {
       ufpLine.readError = ufpDisk.error
     }
-    if (ufpImport.subpathError) {
-      ufpLine.subpathFallback = ufpImport.subpathError
-    }
-    if (exportKeys.length > 10) {
-      ufpLine.exportKeysSample = exportKeys.slice(0, 12)
-    }
     connectProgress(this.moduleLog, "unifi-protect", ufpLine)
-    const ProtectApi = resolveProtectApiExport(protectMod)
-    if (typeof ProtectApi !== "function") {
-      throw new Error(
-        `MMM-UniFiProtect: no ProtectApi constructor (keys=${JSON.stringify(exportKeys)})`,
+
+    const hasApiKey = cfg.apiKey && typeof cfg.apiKey === "string" && cfg.apiKey.trim().length > 0
+    if (hasApiKey) {
+      this.moduleLog.debug(
+        "apiKey is configured but unifi-protect v5 authenticates with username/password only; apiKey is ignored",
       )
     }
-    if (cfg.debugLogging) {
-      this.moduleLog.debug("ProtectApi prototype", {
-        name: ProtectApi.name,
-        retrieve: typeof ProtectApi.prototype.retrieve,
-        _retrieve: typeof ProtectApi.prototype._retrieve,
-      })
+
+    if (cfg.traceRetrieve !== false) {
+      this._httpTraceUnsub = subscribeProtectHttpTrace(channels, this.moduleLog)
     }
-    const hasApiKey = cfg.apiKey && typeof cfg.apiKey === "string" && cfg.apiKey.trim().length > 0
 
-    const traceRetrieve = cfg.traceRetrieve !== false
-
-    const tryConnect = async (includeApiKey) => {
-      const next = new ProtectApi(log)
-      const patchMeta = patchProtectApiRetrieve(next, this.moduleLog, traceRetrieve)
-      connectProgress(this.moduleLog, "session", {
-        includeApiKey: !!includeApiKey,
-        patchLayer: patchMeta.patchLayer,
-      })
-      if (includeApiKey) {
-        next.headers["x-api-key"] = String(cfg.apiKey).trim()
-      }
+    connectProgress(this.moduleLog, "session", { includeApiKey: false })
+    try {
       if (cfg.debugLogging) {
-        this.moduleLog.debug("Protect login() …")
+        this.moduleLog.debug("ProtectClient.connect() …")
       }
-      if (!(await next.login(host, username, password))) {
-        this.moduleLog.debug("Protect login() returned false", {
-          host,
-          includeApiKey: !!includeApiKey,
-          node: process.version,
-          traceHint: "See [retrieve#n] lines for HTTP detail when traceRetrieve is true.",
-        })
-        return null
-      }
-      if (cfg.debugLogging) {
-        this.moduleLog.debug("Protect getBootstrap() …")
-      }
-      const bootstrapOk = await next.getBootstrap()
-      if (bootstrapOk) {
-        return next
-      }
-      // getBootstrap() ties success to BOTH HTTP bootstrap and the realtime WSS channel. In Docker / some
-      // networks WSS can fail while HTTPS login + bootstrap still work — keep a usable session for snapshots.
-      const camCount = next.bootstrap?.cameras?.length ?? 0
-      if (camCount > 0) {
-        this.moduleLog.debug(
-          "Protect getBootstrap() returned false but bootstrap has cameras — continuing without realtime WebSocket (snapshots OK; motion/ring/smart toasts need WSS). Often fix: host firewall, or run MagicMirror with Node 20+ and a network path that allows wss to the console.",
-          { host, cameraCount: camCount, node: process.version },
-        )
-        return next
-      }
-      this.moduleLog.debug("Protect getBootstrap() returned false (no camera list on session)", {
+      this.api = await ProtectClient.connect({
         host,
-        node: process.version,
+        username,
+        password,
+        log,
       })
-      return null
-    }
-
-    this.api = await tryConnect(hasApiKey)
-    if (!this.api && hasApiKey) {
-      this.moduleLog.debug("connect failed with x-api-key, retrying without api key header")
-      this.api = await tryConnect(false)
-    }
-
-    const ok = Boolean(this.api)
-    if (!ok) {
+    } catch (err) {
       this._connectBackoffKey = backoffKey
       this._connectNotBefore = Date.now() + CONNECT_FAILURE_BACKOFF_MS
-      this.moduleLog.debug("connect/bootstrap failed — see [retrieve#n] trace and [unifi-protect:error] if any.")
-      this.moduleLog.debug("state after connect failure", { host, node: process.version })
+      const msg = err instanceof Error ? err.message : String(err)
+      this.moduleLog.debug("connect failed", {
+        host,
+        node: process.version,
+        error: msg,
+        name: err instanceof Error ? err.name : undefined,
+        traceHint: "See [retrieve#n] lines for HTTP detail when traceRetrieve is true.",
+      })
+      this.stopHttpTrace()
       await probeUniFiOsLanding(host, this.moduleLog)
       this.sendSocketNotification("UNIFIPROTECT_STATUS", {
         ok: false,
@@ -871,7 +858,7 @@ module.exports = NodeHelper.create({
     this._connectBackoffKey = null
     this._connectNotBefore = 0
 
-    const resolved = this.resolveCameras(cfg.cameras, this.api.bootstrap?.cameras ?? [])
+    const resolved = this.resolveCameras(cfg.cameras, this.api.cameras ?? [])
     const valid = resolved.filter(c => c.id)
     if (resolved.length > 0 && valid.length === 0) {
       this.moduleLog.debug("no configured cameras matched Protect (check id or name)")
@@ -890,7 +877,7 @@ module.exports = NodeHelper.create({
       cameras: valid,
     })
 
-    this.attachWs(cfg)
+    this.attachEvents(cfg)
     this.startSnapshots(cfg, valid)
     void this.startProtectNativeLivestreams(cfg, valid)
   },
@@ -920,9 +907,16 @@ module.exports = NodeHelper.create({
         continue
       }
 
-      const ls = this.api.createLivestream()
+      const camera = this.api.camera(cam.id)
+      if (!camera) {
+        this._liveNativeFailed.add(cam.id)
+        continue
+      }
+
       const cameraId = cam.id
       let sawSegment = false
+      const abort = new AbortController()
+      let timeoutId = null
 
       const refreshSnapshots = () => {
         this.clearSnapshots()
@@ -936,12 +930,7 @@ module.exports = NodeHelper.create({
         this._liveNativeFailed.add(cameraId)
         this.moduleLog.debug("protect native live disabled for camera", cameraId, reason)
         try {
-          ls.removeAllListeners()
-        } catch {
-          /* ignore */
-        }
-        try {
-          ls.stop()
+          abort.abort()
         } catch {
           /* ignore */
         }
@@ -949,90 +938,86 @@ module.exports = NodeHelper.create({
         refreshSnapshots()
       }
 
-      const timeoutId = setTimeout(() => {
-        if (!sawSegment) {
-          failNative("(timeout waiting for first fMP4 segment)")
-        }
-      }, 15000)
-
-      ls.on("codec", (codec) => {
-        const c = typeof codec === "string" ? codec : ""
-        this.sendSocketNotification("UNIFIPROTECT_LIVE_CODEC", { cameraId, codec: c })
-      })
-
-      ls.on("initsegment", (buf) => {
-        const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf)
-        if (b.length === 0) {
-          return
-        }
-        this.sendSocketNotification("UNIFIPROTECT_LIVE_FMP4", {
-          cameraId,
-          kind: "init",
-          data: b.toString("base64"),
-        })
-      })
-
-      ls.on("segment", (buf) => {
-        const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf)
-        if (b.length === 0) {
-          return
-        }
-        if (!sawSegment) {
-          sawSegment = true
-          clearTimeout(timeoutId)
-          refreshSnapshots()
-        }
-        this.sendSocketNotification("UNIFIPROTECT_LIVE_FMP4", {
-          cameraId,
-          kind: "segment",
-          data: b.toString("base64"),
-        })
-      })
-
-      ls.on("close", () => {
-        clearTimeout(timeoutId)
-        this._protectLiveByCamera.delete(cameraId)
-        if (cfg.debugLogging) {
-          this.moduleLog.debug("protect native livestream close", cameraId, { sawSegment })
-        }
-        try {
-          ls.removeAllListeners()
-        } catch {
-          /* ignore */
-        }
-        refreshSnapshots()
-      })
-
-      let started = false
+      let ls
       try {
-        started = await ls.start(cameraId, 0, {
+        ls = camera.livestream({
           segmentLength: 400,
           chunkSize: 8192,
-          emitTimestamps: false,
-          lens: 0,
+          timestamps: false,
+          signal: abort.signal,
+          discardOnDispose: true,
         })
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
-        this.moduleLog.debug("protect livestream start threw", cameraId, msg)
-      }
-      if (!started) {
-        clearTimeout(timeoutId)
-        try {
-          ls.removeAllListeners()
-        } catch {
-          /* ignore */
-        }
-        try {
-          ls.stop()
-        } catch {
-          /* ignore */
-        }
+        this.moduleLog.debug("protect livestream subscribe threw", cameraId, msg)
         this._liveNativeFailed.add(cameraId)
         refreshSnapshots()
         continue
       }
 
-      this._protectLiveByCamera.set(cameraId, { ls })
+      this._protectLiveByCamera.set(cameraId, { ls, abort })
+
+      timeoutId = setTimeout(() => {
+        if (!sawSegment) {
+          failNative("(timeout waiting for first fMP4 segment)")
+        }
+      }, 15000)
+
+      void (async () => {
+        try {
+          for await (const segment of ls) {
+            if (!segment || typeof segment !== "object") {
+              continue
+            }
+            if (segment.type === "init") {
+              const codec = typeof segment.codec === "string" ? segment.codec : (ls.codec || "")
+              this.sendSocketNotification("UNIFIPROTECT_LIVE_CODEC", { cameraId, codec })
+              const b = Buffer.isBuffer(segment.data) ? segment.data : Buffer.from(segment.data)
+              if (b.length > 0) {
+                this.sendSocketNotification("UNIFIPROTECT_LIVE_FMP4", {
+                  cameraId,
+                  kind: "init",
+                  data: b.toString("base64"),
+                })
+              }
+              continue
+            }
+            const b = Buffer.isBuffer(segment.data) ? segment.data : Buffer.from(segment.data)
+            if (b.length === 0) {
+              continue
+            }
+            if (!sawSegment) {
+              sawSegment = true
+              if (timeoutId) {
+                clearTimeout(timeoutId)
+                timeoutId = null
+              }
+              refreshSnapshots()
+            }
+            this.sendSocketNotification("UNIFIPROTECT_LIVE_FMP4", {
+              cameraId,
+              kind: "segment",
+              data: b.toString("base64"),
+            })
+          }
+        } catch (e) {
+          if (!abort.signal.aborted) {
+            const msg = e instanceof Error ? e.message : String(e)
+            this.moduleLog.debug("protect livestream iteration ended", cameraId, msg)
+            failNative(msg)
+            return
+          }
+        } finally {
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+          }
+          this._protectLiveByCamera.delete(cameraId)
+          if (cfg.debugLogging) {
+            this.moduleLog.debug("protect native livestream close", cameraId, { sawSegment })
+          }
+          refreshSnapshots()
+        }
+      })()
     }
     const anyNative = list.some(c => cameraWantsProtectNativeLive(c, cfg))
     if (anyNative && cfg.streamDiagnostics === true && this._lastValidCameras) {
@@ -1040,13 +1025,8 @@ module.exports = NodeHelper.create({
     }
   },
 
-  attachWs(cfg) {
+  attachEvents(cfg) {
     if (!this.api || this.wsAttached) {
-      return
-    }
-    const ws = this.api._eventsWs
-    if (!ws) {
-      this.moduleLog.debug("realtime updates unavailable (no websocket)")
       return
     }
     const flags = {
@@ -1056,9 +1036,8 @@ module.exports = NodeHelper.create({
     }
     const eventDebounceMs = typeof cfg.eventDebounceMs === "number" ? cfg.eventDebounceMs : 1500
 
-    this.wsHandler = (packet) => {
-      const normalized = toNormalizePacket(packet)
-      const events = normalizeUpdatePacket(normalized, this.normalizeState, flags)
+    this.wsHandler = (event) => {
+      const events = typedEventsToUi(event, flags)
       const now = Date.now()
       for (const ev of events) {
         const key = `${ev.type}:${ev.cameraId}:${ev.object || ""}`
@@ -1070,7 +1049,7 @@ module.exports = NodeHelper.create({
         if (!shouldEmit(key, now, ms, this.debounceMap)) {
           continue
         }
-        const enriched = enrichEventWithCameraName(ev, this.api?.bootstrap?.cameras)
+        const enriched = enrichEventWithCameraName(ev, this.api?.cameras)
         this.sendSocketNotification("UNIFIPROTECT_EVENT", enriched)
         if (ev.type === "ring") {
           if (cfg.doorbellSnapshotBurst !== false) {
@@ -1086,15 +1065,18 @@ module.exports = NodeHelper.create({
       }
     }
 
-    this.api.on("message", this.wsHandler)
-    this.wsCloseHandler = () => {
-      this.moduleLog.debug("realtime connection closed")
+    this._packetSub = this.api.on("packet", this.wsHandler)
+    this._connectionLostSub = this.api.connection.on("controllerLost", () => {
+      this.moduleLog.debug("realtime connection lost")
       this.sendSocketNotification("UNIFIPROTECT_STATUS", {
         ok: false,
         error: "Protect realtime connection closed",
       })
-    }
-    ws.addEventListener("close", this.wsCloseHandler)
+    })
+    this._connectionRecoveredSub = this.api.connection.on("controllerRecovered", () => {
+      this.moduleLog.debug("realtime connection recovered")
+      this.sendSocketNotification("UNIFIPROTECT_STATUS", { ok: true })
+    })
     this.wsAttached = true
     this.moduleLog.debug("realtime listener active")
   },
@@ -1166,11 +1148,11 @@ module.exports = NodeHelper.create({
       return
     }
     try {
-      const device = this.api.bootstrap?.cameras?.find(c => c.id === cameraId)
+      const device = this.api.camera(cameraId)
       if (!device) {
         return
       }
-      const raw = await this.api.getSnapshot(device)
+      const raw = await device.snapshot()
       if (!raw) {
         return
       }
@@ -1187,23 +1169,6 @@ module.exports = NodeHelper.create({
     }
   },
 })
-
-/**
- * unifi-protect v4 emits decoded packets as `{ header, payload }`; our normalizer expects `{ action, payload }`.
- *
- * @param {unknown} packet
- * @returns {unknown}
- */
-function toNormalizePacket(packet) {
-  if (!packet || typeof packet !== "object") {
-    return packet
-  }
-  const p = /** @type {{ header?: unknown, payload?: unknown }} */ (packet)
-  if (p.header && typeof p.header === "object") {
-    return { action: p.header, payload: p.payload }
-  }
-  return packet
-}
 
 /**
  * UniFi OS exposes `X-CSRF-Token` on GET `/`. Many home gateways answer HTTPS on :443 without that header.
@@ -1232,7 +1197,7 @@ function probeUniFiOsLanding(host, moduleLog) {
           hasXCsrfToken: Boolean(csrf),
           hint: csrf
             ? "CSRF header present (UniFi OS–like); failure is likely login, cookies, or bootstrap API."
-            : "No X-CSRF-Token on GET / — on newer UniFi OS this is common; unifi-protect v4+ logs in without that preflight. If you are still on v3 of this library, upgrade. Otherwise check VLAN/route/proxy, or that this IP is really your UniFi console.",
+            : "No X-CSRF-Token on GET / — on newer UniFi OS this is common; unifi-protect v5 logs in without that preflight. If login still fails, check VLAN/route/proxy, or that this IP is really your UniFi console.",
         })
         res.resume()
         finish()
