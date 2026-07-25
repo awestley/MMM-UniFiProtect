@@ -398,7 +398,7 @@ Module.register("MMM-UniFiProtect", {
     streamUrlByCameraId: {},
     webhookUrl: "",
     debugLogging: false,
-    /** Log each unifi-protect `retrieve()` (except snapshot URLs) with status + header keys. Default true. */
+    /** Log each unifi-protect HTTP request (except snapshot URLs) via diagnostics as `[retrieve#n]`. Default true. */
     traceRetrieve: true,
     logFile: "",
     /** Optional static header; when empty, a single camera uses its name as the header (no "UniFi Protect"). */
@@ -414,7 +414,7 @@ Module.register("MMM-UniFiProtect", {
     streamDiagnostics: false,
     /**
      * When true (default), cameras without an iframe `streamUrl` use UniFi Protect fMP4 livestream
-     * (`unifi-protect` ProtectLivestream) in the browser via MSE. Set false to use JPEG snapshots only.
+     * (`camera.livestream()`) in the browser via MSE. Set false to use JPEG snapshots only.
      */
     protectNativeLive: true,
   },
