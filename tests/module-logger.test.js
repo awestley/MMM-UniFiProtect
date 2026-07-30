@@ -245,3 +245,144 @@ test("log file append failure stringifies non-Error throw", () => {
     fs.unlinkSync(tmp)
   }
 })
+
+test("resolveLogFilePath falls back to os.homedir when HOME unset", () => {
+  const prevHome = process.env.HOME
+  delete process.env.HOME
+  try {
+    const r = resolveLogFilePath("~/logs/homedir-fallback.log")
+    assert.equal(r, path.resolve(path.join(os.homedir(), "logs/homedir-fallback.log")))
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.HOME
+    } else {
+      process.env.HOME = prevHome
+    }
+  }
+})
+
+test("resolveLogFilePath resolves ~/ via path.resolve when home is empty", () => {
+  const prevHome = process.env.HOME
+  // Empty HOME makes os.homedir() return "" on Unix; ~ expansion falls back to path.resolve.
+  process.env.HOME = ""
+  try {
+    const r = resolveLogFilePath("~/logs/empty-home.log")
+    assert.equal(r, path.resolve("~/logs/empty-home.log"))
+    assert.equal(resolveLogFilePath("~"), path.resolve("~"))
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.HOME
+    } else {
+      process.env.HOME = prevHome
+    }
+  }
+})
+
+test("resolveLogFilePath uses USERPROFILE when platform is win32", () => {
+  const prevPlatform = Object.getOwnPropertyDescriptor(process, "platform")
+  const prevHome = process.env.HOME
+  const prevUp = process.env.USERPROFILE
+  const fakeHome = path.join(os.tmpdir(), `mmm-up-winprofile-${Date.now()}`)
+  fs.mkdirSync(fakeHome, { recursive: true })
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true })
+  delete process.env.HOME
+  process.env.USERPROFILE = fakeHome
+  try {
+    const rel = "logs/win-up.log"
+    assert.equal(resolveLogFilePath(`~/${rel}`), path.resolve(path.join(fakeHome, rel)))
+  } finally {
+    if (prevPlatform) {
+      Object.defineProperty(process, "platform", prevPlatform)
+    }
+    if (prevHome === undefined) {
+      delete process.env.HOME
+    } else {
+      process.env.HOME = prevHome
+    }
+    if (prevUp === undefined) {
+      delete process.env.USERPROFILE
+    } else {
+      process.env.USERPROFILE = prevUp
+    }
+    fs.rmSync(fakeHome, { recursive: true, force: true })
+  }
+})
+
+test("resolveLogFilePath uses HOMEDRIVE+HOMEPATH on win32 without USERPROFILE", () => {
+  const prevPlatform = Object.getOwnPropertyDescriptor(process, "platform")
+  const prevHome = process.env.HOME
+  const prevUp = process.env.USERPROFILE
+  const prevDrive = process.env.HOMEDRIVE
+  const prevPath = process.env.HOMEPATH
+  const fakeHome = path.join(os.tmpdir(), `mmm-up-windrive-${Date.now()}`)
+  fs.mkdirSync(fakeHome, { recursive: true })
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true })
+  delete process.env.HOME
+  delete process.env.USERPROFILE
+  // homeDir returns `${HOMEDRIVE}${HOMEPATH}` — empty drive + full path equals fakeHome.
+  process.env.HOMEDRIVE = ""
+  process.env.HOMEPATH = fakeHome
+  try {
+    const rel = "w/drive.log"
+    assert.equal(resolveLogFilePath(`~/${rel}`), path.resolve(path.join(fakeHome, rel)))
+  } finally {
+    if (prevPlatform) {
+      Object.defineProperty(process, "platform", prevPlatform)
+    }
+    if (prevHome === undefined) {
+      delete process.env.HOME
+    } else {
+      process.env.HOME = prevHome
+    }
+    if (prevUp === undefined) {
+      delete process.env.USERPROFILE
+    } else {
+      process.env.USERPROFILE = prevUp
+    }
+    if (prevDrive === undefined) {
+      delete process.env.HOMEDRIVE
+    } else {
+      process.env.HOMEDRIVE = prevDrive
+    }
+    if (prevPath === undefined) {
+      delete process.env.HOMEPATH
+    } else {
+      process.env.HOMEPATH = prevPath
+    }
+    fs.rmSync(fakeHome, { recursive: true, force: true })
+  }
+})
+
+test("appendLineSync no-ops when path.resolve yields empty", () => {
+  const origResolve = path.resolve
+  path.resolve = () => ""
+  const origErr = console.error
+  let errs = 0
+  console.error = () => {
+    errs++
+  }
+  try {
+    createModuleLogger({ consoleEnabled: false, filePath: "/tmp/never-written.log" }).debug("skip")
+    assert.equal(errs, 0)
+    assert.equal(fs.existsSync("/tmp/never-written.log"), false)
+  } finally {
+    path.resolve = origResolve
+    console.error = origErr
+  }
+})
+
+test("logFileLine coerces non-string tag and line", () => {
+  const tmp = path.join(os.tmpdir(), `mmm-up-coerce-${Date.now()}.log`)
+  try {
+    createModuleLogger({ consoleEnabled: false, filePath: tmp }).logFileLine(99, { ok: true })
+    const content = fs.readFileSync(tmp, "utf8")
+    assert.ok(content.includes("[library]"))
+    assert.ok(content.includes("[object Object]"))
+  } finally {
+    try {
+      fs.unlinkSync(tmp)
+    } catch {
+      /* ignore */
+    }
+  }
+})
