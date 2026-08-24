@@ -8,9 +8,9 @@ Credentials and HTTP/WebSocket traffic stay in **`node_helper.js`** on the Magic
 
 ## Prerequisites
 
-- MagicMirror² with Node.js **22.20+** (required by `unifi-protect` v4’s undici dependency; MagicMirror² images ship Node 24).
+- MagicMirror² with Node.js **22.20+** (required by `unifi-protect` v5; MagicMirror² images ship Node 24).
 - A UniFi OS console running **UniFi Protect** (stable release; Early Access is unsupported by Ubiquiti for third-party clients and may break without notice).
-- A **local** administrator on the console (UniFi cloud-only accounts cannot authenticate the way this module does). Ubiquiti’s current guidance is to create a local admin with full Protect access and, when the console offers it, an **API key** used together with your username and password.
+- A **local** administrator on the console (UniFi cloud-only accounts cannot authenticate the way this module does). Ubiquiti’s current guidance is to create a local admin with full Protect access.
 - **RTSPS** (or RTSP) enabled on camera channels only if you plan to point **go2rtc** or another player at those URLs for `streamUrl` iframe embedding (optional; not required for native live or snapshots).
 
 ## Installation
@@ -133,13 +133,13 @@ Bootstrap requires authentication (cookies or API token, depending on UniFi OS v
 | `host` | string | `""` | UniFi OS console hostname or IP (no `https://`). |
 | `username` | string | `""` | Local Protect user. |
 | `password` | string | `""` | Password for that user. |
-| `apiKey` | string | `""` | If your console issues API keys, set it here; sent as `X-API-Key` after login (Ubiquiti has changed details over time—if login fails, try updating `unifi-protect` or use password-only). |
+| `apiKey` | string | `""` | Unused with `unifi-protect` v5 (username/password only). Kept for config compatibility; ignored at connect time. |
 | `cameras` | array | `[]` | Entries may be a camera id string, `{ id, name?, streamUrl? }`, or `{ name, streamUrl? }` matched against Protect device names. |
 | `protectNativeLive` | boolean | `true` | Stream live fMP4 video directly from UniFi Protect via Media Source Extensions (MSE). When `true` and no `streamUrl` is configured for a camera, the tile shows a `<video>` element fed by the Protect livestream WebSocket. Set `false` to fall back to JPEG snapshots. |
 | `snapshotRefreshSeconds` | number | `2` | Interval to pull JPEG snapshots for cameras using snapshot mode (i.e. `protectNativeLive` is `false` or a `streamUrl` is set). Snapshot polling is skipped entirely for cameras using native live. Set `0` to disable snapshots. |
-| `showMotionEvents` | boolean | `true` | Emit UI toasts for motion (`lastMotion` updates). |
-| `showRingEvents` | boolean | `true` | Emit toasts for doorbell rings (`lastRing`). |
-| `showSmartEvents` | boolean | `true` | Emit toasts for AI smart detection (`smartDetectTypes` on Protect event adds). |
+| `showMotionEvents` | boolean | `true` | Emit UI toasts for motion (`motionDetected` events). |
+| `showRingEvents` | boolean | `true` | Emit toasts for doorbell rings (`doorbellRing`). |
+| `showSmartEvents` | boolean | `true` | Emit toasts for AI smart detection (`smartDetect` object types). |
 | `eventDebounceMs` | number | `1500` | Minimum gap between duplicate event keys before another toast/webhook fires. |
 | `useMagicMirrorAlerts` | boolean | `true` | When `true`, motion / ring / smart events use MagicMirror’s **`alert`** module (`SHOW_ALERT` notifications) so they match the default mirror notification UI. Set `false` for the legacy toast stack **under** the camera tile. Requires the `alert` module in `config.js`. |
 | `maxEventToasts` | number | `6` | Cap on stacked rows when `useMagicMirrorAlerts` is `false`. |
@@ -147,7 +147,7 @@ Bootstrap requires authentication (cookies or API token, depending on UniFi OS v
 | `streamUrlByCameraId` | object | `{}` | Map of camera id → URL for an **iframe** (e.g. go2rtc player page on your LAN). Takes priority over native live for that camera. If both are set, per-camera `streamUrl` wins over this map. |
 | `webhookUrl` | string | `""` | If set, each normalized event is POSTed as JSON (`Content-Type: application/json`). |
 | `debugLogging` | boolean | `false` | When `true`, emits **sparse** diagnostics: Node (connect, session, realtime listener, rings, snapshot polling summary, failures) via `[MMM-UniFiProtect]` and browser `Log.log` for status, camera count, and doorbell UI. Motion/smart events and per-frame snapshots are **not** logged. The `unifi-protect` library still uses your log adapter for its own messages when this is on. |
-| `traceRetrieve` | boolean | `true` | When `true`, logs **`[retrieve#n]`** for each `unifi-protect` HTTP call (except snapshot URLs): URL, `statusCode`, `responseNull`, sorted **`headerKeys`**, and booleans for `set-cookie` / CSRF headers **after** this module normalizes undici’s `Headers` object (see troubleshooting below). Set `false` to silence. |
+| `traceRetrieve` | boolean | `true` | When `true`, logs **`[retrieve#n]`** for each `unifi-protect` HTTP call (except snapshot URLs) via the library’s diagnostics channel: URL, method, `statusCode`, `durationMs`, and host. Set `false` to silence. |
 | `streamDiagnostics` | boolean | `false` | When `true`, logs explicit **stream vs snapshot** decisions: server lines prefixed with **`[stream-diag]`** (also mirrored to `logFile` when configured) and browser `Log.log` lines prefixed with **`[MMM-UniFiProtect][stream]`**. URLs are logged with common secret-like query params redacted. |
 | `logFile` | string | `""` | **Node (server) only:** path on the MagicMirror machine for append-only UTF-8 logging. When non-empty, each sparse `moduleLog` line is written with an ISO timestamp (same messages as above **excluding** browser `Log.log`). Independent of `debugLogging`: you can log to a file with `logFile` set and `debugLogging` `false`. Parent directories are created if missing. Leading `~/` expands using `HOME` (POSIX) or `USERPROFILE` (Windows). On start, the helper prints `file logging: <absolute path>` in the **MagicMirror server** terminal. If the file cannot be written, a **one-time** error is printed there (writes are otherwise silent). Relative paths are resolved from MagicMirror’s process working directory. |
 | `title` | string | `""` | Optional static header. When empty and there is **one** camera, the header shows that camera’s name (no default “UniFi Protect”). With **multiple** cameras, leave empty to omit the header and use per-tile labels only. |
@@ -173,7 +173,7 @@ This repository’s sample `config/config.js` can read **`UNIFI_PROTECT_*`** fro
 | `UNIFI_PROTECT_HOST` | `host` | UniFi OS console **IP or hostname** (no `https://`). Same idea as **Finding camera names and IDs** — use the LAN address you use in the browser. |
 | `UNIFI_PROTECT_USERNAME` | `username` | Local Protect user (not a cloud-only account). |
 | `UNIFI_PROTECT_PASSWORD` | `password` | That user’s password. Prefer `.env`, not inline in `service.yml`. |
-| `UNIFI_PROTECT_API_KEY` | `apiKey` | Optional console API key if your UniFi OS version issues one; sent after login. Leave empty if unused. |
+| `UNIFI_PROTECT_API_KEY` | `apiKey` | Unused with `unifi-protect` v5; left for config compatibility. Leave empty. |
 | `UNIFI_PROTECT_CAMERA_IDS` | `cameras` | **Comma-separated** Protect camera **UUIDs** (from bootstrap / Protect UI). Becomes `[{ id }, …]`. Same IDs as in **Option 2** above. |
 | `UNIFI_PROTECT_NATIVE_LIVE` | `protectNativeLive` | `true` (default) to stream live fMP4 video from Protect via MSE; `false` to fall back to JPEG snapshots. |
 | `UNIFI_PROTECT_SNAPSHOT_REFRESH_SECONDS` | `snapshotRefreshSeconds` | Seconds between JPEG refreshes for tiles in snapshot mode; `0` disables. Skipped for cameras using native live. |
@@ -209,43 +209,41 @@ This repository’s sample `config/config.js` can read **`UNIFI_PROTECT_*`** fro
 - Logs from the **node_helper** appear in the terminal where you start MagicMirror (the Node/electron **server**), not in the browser console unless you use `debugLogging` and look at `Log.log` in devtools.
 - If the path is wrong or permissions deny writes, check the server terminal for `log file write failed` or `log dir create failed`.
 
-### `bad unifi-protect export` or wrong `ProtectApi` (bundled MagicMirror / Docker)
+### `unifi-protect incompatible` or connect fails after upgrade (bundled MagicMirror / Docker)
 
-The helper loads **`unifi-protect/dist/protect-api.js`** first, then falls back to the package root. **`[connect-step]`** lines are compact: **`unifi-protect`** (installed **version**, **importFrom** `dist` or `package`, optional **subpathFallback**, **exportKeys** count, and **`packageJsonPath`**), then **`session`** (**patchLayer** for the undici header shim, **includeApiKey**). With **`debugLogging`**, the log file also gets **stack** traces on connect errors and extra **moduleLog.debug** lines. If **`exportKeys`** is large, a short **`exportKeysSample`** may appear.
+**`[connect-step]`** lines are compact: **`unifi-protect`** (installed **version**, **importFrom** `package`, **exportKeys** count, and **`packageJsonPath`**), then **`session`**. With **`debugLogging`**, the log file also gets **stack** traces on connect errors and extra **moduleLog.debug** lines.
 
-Ensure **`npm install`** ran inside **`modules/MMM-UniFiProtect`** on the host that runs MagicMirror so **`node_modules/unifi-protect`** matches **`package.json`** (v4.x, Node 22.20+).
+Ensure **`npm install`** ran inside **`modules/MMM-UniFiProtect`** on the host that runs MagicMirror so **`node_modules/unifi-protect`** matches **`package.json`** (v5.x, Node 22.20+).
 
-If the log shows **`unifi-protect` v3.x** or **`unifi-protect incompatible`**, the running host still has an **old `node_modules`**. This module **requires v4** (`package.json` pins it). On the machine or in the Docker build, run **`npm install`** in **`modules/MMM-UniFiProtect`** (prefer **`package-lock.json`** in CI), then redeploy — do not copy a stale **`node_modules`** from an older image.
+If the log shows **`unifi-protect` v3.x / v4.x** or **`unifi-protect incompatible`**, the running host still has an **old `node_modules`**. This module **requires v5** (`package.json` pins it). On the machine or in the Docker build, run **`npm install`** in **`modules/MMM-UniFiProtect`** (prefer **`package-lock.json`** in CI), then redeploy — do not copy a stale **`node_modules`** from an older image.
 
-### `connect/bootstrap failed` in the log file
+### `Failed to connect or refresh devices` in the log file
 
-Login or bootstrap failed (before cameras load). The `unifi-protect` library logs the specific reason with **`[unifi-protect:error]`** or **`[unifi-protect:warn]`** lines in your **`logFile`** (and on the server console as `[MMM-UniFiProtect] …`) **when it calls `log.error`**. Some failures are still easiest to read from this module’s summary lines and the **`HTTPS probe GET /`** entry below.
+`ProtectClient.connect()` failed (before cameras load). The `unifi-protect` library logs the specific reason with **`[unifi-protect:error]`** or **`[unifi-protect:warn]`** lines in your **`logFile`** (and on the server console as `[MMM-UniFiProtect] …`) **when it calls `log.error`**. Some failures are still easiest to read from this module’s summary lines and the **`HTTPS probe GET /`** entry below.
 
 After each failed connect, the helper logs a probe of **`https://HOST/`** (same TLS behavior as the library: self-signed OK):
 
-- **`hasXCsrfToken: false`** — **not** definitive on newer UniFi OS: the landing page can be **nginx** with **no** `X-CSRF-Token` on `GET /` while the controller is still correct. This module uses **`unifi-protect` v4**, which authenticates via the login API (and `X-Updated-CSRF-Token` / cookies) without requiring that preflight header. If login still fails, check VLAN/route/proxy, or that `HOST` is really your console (on split networks, `.1` may not be the UniFi device).
+- **`hasXCsrfToken: false`** — **not** definitive on newer UniFi OS: the landing page can be **nginx** with **no** `X-CSRF-Token` on `GET /` while the controller is still correct. This module uses **`unifi-protect` v5**, which authenticates via the login API without requiring that preflight header. If login still fails, check VLAN/route/proxy, or that `HOST` is really your console (on split networks, `.1` may not be the UniFi device).
 - **`hasXCsrfToken: true`** — classic UniFi OS landing fingerprint; focus on **username/password**, **local user** with Protect access, and controller health.
 
 Typical fixes:
 
 - Use a **local Protect user** (UniFi OS → Users) with a password; verify the account in the Protect web UI.
 - Prefer the console **LAN IP** if **`unifi.local`** is flaky (mDNS / VLAN / Docker).
-- Confirm the Protect app works from the same subnet; firewalls must allow **HTTPS to the console** (library uses `https://HOST/...`).
+- Confirm the Protect app works from the same subnet; firewalls must allow **HTTPS to the console** (library uses `https://HOST/...`) and the realtime **WSS** path for events and native live.
 - Update the **`unifi-protect`** dependency if UniFi OS was upgraded and the API changed.
 
 The helper applies a **15s backoff** after a failed refresh (same host + username) so repeated `UNIFIPROTECT_CONNECT` messages do not hammer the controller or flood the log; you will see **`connect skipped (backoff after recent failure)`** until the window passes.
 
-### Why `curl` / `wget` to `/api/auth/login` “works” but `Protect login()` failed
+### HTTP tracing (`[retrieve#n]`)
 
-Node’s **`https`** stack returns **`IncomingMessage.headers`** as a **plain object** with lowercase keys, so `headers["set-cookie"]` works. **`unifi-protect` v4** uses **undici**; responses use the Web **`Headers`** API. The library reads `response.headers["set-cookie"]` (bracket style), which is often **`undefined`** on undici `Headers`, so `loginController` thinks there is no cookie/CSRF even when **`POST /api/auth/login` returned 200** with headers.
-
-**This module wraps every `retrieve()` response** so `headers` look like Node’s plain object (and logs **`[retrieve#n]`** when `traceRetrieve` is true). That fixes the mismatch; use **`[retrieve#n]`** lines—not a separate manual POST probe—to see what the library actually received.
+When **`traceRetrieve`** is true, the helper subscribes to `unifi-protect`’s HTTP diagnostics channel and logs each completed request (except snapshot URLs) as **`[retrieve#n]`**. Use those lines—not a separate manual POST probe—to see what the library actually requested and received.
 
 ### Snapshots work but no motion / doorbell / smart toasts
 
-`unifi-protect` treats **`getBootstrap()` as failed** if the **WebSocket** to `wss://<host>/proxy/protect/ws/updates` never opens, even when HTTPS login and the bootstrap JSON succeeded. Some Docker or firewall setups block that WSS path.
+Realtime events need the Protect updates WebSocket (`wss://<host>/proxy/protect/ws/updates`). `ProtectClient.connect()` opens that channel as part of connect; if the network blocks WSS, connect fails entirely (no “snapshots-only” half-session in v5).
 
-This module **falls back to a “snapshots only” session** when bootstrap already contains cameras: you should see a debug line like *continuing without realtime WebSocket*. Tiles update; **motion / ring / smart events need WSS** until the network allows that WebSocket.
+Allow WSS from the MagicMirror host to the console (Docker/firewall), then reconnect.
 
 If you still see many `connecting` lines, you may have **more than one** `MMM-UniFiProtect` block in `config.js`; each instance triggers a connect (connects are **serialized** so they do not overlap).
 
