@@ -1,6 +1,6 @@
 {
   "name": "mmm-unifiprotect",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "MagicMirror module for UniFi Protect cameras, motion, doorbell, and smart (AI) detection events",
   "main": "MMM-UniFiProtect.js",
   "scripts": {
