@@ -215,7 +215,7 @@ This repository’s sample `config/config.js` can read **`UNIFI_PROTECT_*`** fro
 
 Ensure **`npm install`** ran inside **`modules/MMM-UniFiProtect`** on the host that runs MagicMirror so **`node_modules/unifi-protect`** matches **`package.json`** (v5.x, Node 22.20+).
 
-If the log shows **`unifi-protect` v3.x / v4.x** or **`unifi-protect incompatible`**, the running host still has an **old `node_modules`**. This module **requires v5** (`package.json` pins it). On the machine or in the Docker build, run **`npm install`** in **`modules/MMM-UniFiProtect`** (prefer **`package-lock.json`** in CI), then redeploy — do not copy a stale **`node_modules`** from an older image.
+If the log shows **`unifi-protect` v3.x / v4.x** or **`unifi-protect incompatible`**, the running host still has an **old `node_modules`**. This module **requires v5** (`package.json` pins **5.3.1**). On the machine or in the Docker build, run **`npm install`** in **`modules/MMM-UniFiProtect`** (prefer **`package-lock.json`** in CI), then redeploy — do not copy a stale **`node_modules`** from an older image.
 
 ### `Failed to connect or refresh devices` in the log file
 
@@ -298,7 +298,16 @@ npm test
 npm run test:coverage
 ```
 
-Coverage thresholds apply to `helpers/*.js` (pure logic). Run `npm run test:coverage` to enforce **≥95%** lines/branches/functions/statements on those files.
+Coverage thresholds apply to `helpers/*.js` (pure logic). Run `npm run test:coverage` to enforce **≥95%** lines/functions/statements and **≥90%** branches on those files.
+
+### Dependencies
+
+| Package | Pin | Notes |
+|---------|-----|--------|
+| `unifi-protect` | **5.3.1** | Runtime client. Latest published release; requires Node.js **22.20+**. |
+| `undici` | **8.12.3** (override) | `unifi-protect@5.3.1` depends on `undici@8.10.0`, which is inside published security advisories. `package.json` overrides `undici` to **8.12.3** so installs keep the v5 client and a patched HTTP stack. Reinstall (`npm install` or `npm ci`) after pulling so the override is applied. |
+| `katex` | **0.19.1** (override) | Dev-only, via `@eslint/markdown`. Without the override, `micromark-extension-math` installs katex 0.16.x, which is inside [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7). |
+| ESLint toolchain | eslint **^10.13**, `@eslint/css` **^2**, `@eslint/markdown` **^8**, globals **^17.13** | Development only. Not installed by `npm install --omit=dev`. |
 
 ## License
 
